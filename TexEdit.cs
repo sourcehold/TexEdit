@@ -181,35 +181,28 @@ class TxtEdit : Window
                 }
 
                 // read strings
-                UInt32 strLen = 0;
                 for(UInt32 i = 0; i < 250; i++) {
                     Section sec = new Section();
                     UInt32 end;
-                    UInt32 rp = 0;
 
                     if(i == 249) {
                         end = 10; // TODO
                     }else {
-                        end = (offsets[i+1] - offsets[i]) * 2;
+                        end = ((offsets[i+1] - offsets[i]) * 2);
                     }
 
                     sec.Index = i;
 
                     r.BaseStream.Seek((0x3e8 + offsets[i]*2), SeekOrigin.Begin);
-                    while(rp < end) {
+                    for(UInt32 rp = 0; rp < end; rp += 2) {
                         byte[] b = r.ReadBytes(2);
                         sec.Text += System.Text.Encoding.Unicode.GetString(b);
-
-                        rp += 2;
-                        strLen = rp;
 
                         if(b[0] == 0 && b[1] == 0) {
                             if(sec.Text.Length > 1) {
                                 sections.Add(sec);
                             }
                             sec = new Section();
-                            r.ReadBytes(2);
-                            strLen = 0;
                         }
                     }
                 }
