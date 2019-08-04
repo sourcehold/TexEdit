@@ -9,3 +9,6 @@ be created in the same directory, in case the game stops working.
 
 ## Building
 Just fire up your C# compiler of choice, or download a release version.
+
+Thanks to https://github.com/PodeCaradox for his Gm1 converter, which was
+the inspiration behind this tool!
