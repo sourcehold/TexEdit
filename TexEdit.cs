@@ -2,23 +2,24 @@ using Gtk;
 using System;
 using System.IO;
 using System.Collections;
+using System.Collections.Generic;
 
-public class Section {
-    public Section() {}
+public class TexString {
+    public TexString() {}
+    public UInt32 Index; // index into the offset table
     public string Text;
-    public UInt32 Index;
 };
 
 class TxtEdit : Window
 {
     private UInt32[] offsets;
-    private ArrayList sections;
-    private Gtk.ListStore store;
+    private List<TexString> sections;
+    private Gtk.TreeStore store;
     private string filepath;
 
-    public TxtEdit() :  base("Stronghold .tex editor v.0.1") {
+    public TxtEdit() :  base("Stronghold .tex editor v.0.2") {
         offsets = new UInt32[250];
-        sections = new ArrayList();
+        sections = new List<TexString>();
         file_dialog();
 
         SetDefaultSize(800, 600);
@@ -27,6 +28,8 @@ class TxtEdit : Window
         DeleteEvent += delegate {
             Application.Quit();
         };
+
+        Gtk.TreeView tree = new Gtk.TreeView();
 
         // menu bar
         MenuBar mb = new MenuBar();
@@ -47,7 +50,19 @@ class TxtEdit : Window
             MessageDialog md = new MessageDialog(this,
                                                  DialogFlags.DestroyWithParent, MessageType.Question,
                                                  ButtonsType.OkCancel, "This will undo all changes. Continue?");
-            md.Run();
+            ResponseType result = (ResponseType)md.Run();
+            if (result == ResponseType.Ok) {
+                sections = new List<TexString>();
+
+                load_file();
+
+                store = new Gtk.TreeStore(typeof(TexString));
+                foreach(var sec in sections) {
+                    store.AppendValues(sec);
+                }
+                tree.Model = store;
+            }
+
             md.Destroy();
         };
         filemenu.Append(reload);
@@ -85,8 +100,6 @@ class TxtEdit : Window
         vbox.Add(scroller);
 
         // tree view
-        Gtk.TreeView tree = new Gtk.TreeView();
-
         Gtk.TreeViewColumn sectionColumn = new Gtk.TreeViewColumn();
         sectionColumn.Title = "Text";
 
@@ -95,7 +108,7 @@ class TxtEdit : Window
         sectionCell.Edited += sectionCell_edit;
         sectionColumn.PackStart(sectionCell, true);
 
-        store = new Gtk.ListStore(typeof(Section));
+        store = new Gtk.TreeStore(typeof(TexString));
         foreach(var sec in sections) {
             store.AppendValues(sec);
         }
@@ -112,7 +125,7 @@ class TxtEdit : Window
     }
 
     private void RenderSection(Gtk.TreeViewColumn column, Gtk.CellRenderer cell, Gtk.TreeModel model, Gtk.TreeIter iter) {
-        Section sec = (Section)model.GetValue(iter, 0);
+        TexString sec = (TexString)model.GetValue(iter, 0);
         (cell as Gtk.CellRendererText).Text = sec.Text;
     }
 
@@ -120,14 +133,14 @@ class TxtEdit : Window
         Gtk.TreeIter iter;
         store.GetIter (out iter, new Gtk.TreePath (args.Path));
 
-        Section sec = (Section)store.GetValue(iter, 0);
+        TexString sec = (TexString)store.GetValue(iter, 0);
         sec.Text = args.NewText;
     }
 
     private void about_event(object sender, EventArgs args) {
         AboutDialog about = new AboutDialog();
         about.ProgramName = "TexEdit";
-        about.Version = "0.1";
+        about.Version = "0.2";
         about.Copyright = "(C) Julian Offenhäuser";
         about.Comments = @"A tool for editing ingame text in Stronghold";
         about.Website = "https://github.com/sourcehold/TexEdit";
@@ -140,15 +153,88 @@ class TxtEdit : Window
     }
 
     private void save_tex() {
+        // write strings
         FileStream fs = null;
 
         try {
+            System.Text.Encoding encoding = System.Text.Encoding.Unicode;
+
             fs = new FileStream(filepath, FileMode.Open, FileAccess.Write);
-            BinaryWriter w = new BinaryWriter(fs);
+            BinaryWriter w = new BinaryWriter(fs, encoding);
+
+            w.Seek(0x3e8, SeekOrigin.Begin);
+
+            UInt32 currentIndex = 0;
+            foreach(var sec in sections) {
+                UInt32 index = sec.Index;
+                string text = sec.Text;
+
+                if(currentIndex != index) {
+                    w.Write((UInt32)0);
+                    w.Write((UInt16)0);
+                    offsets[index] = (UInt32)((w.BaseStream.Position - 0x3e8) / 2);
+                }
+                currentIndex = index;
+
+                // write the string
+                w.Write(text.ToCharArray());
+                w.Write((UInt32)0);
+            }
+            w.Seek(0, SeekOrigin.Begin);
 
             foreach(UInt32 offset in offsets) {
                 w.Write(offset);
             }
+        } finally {
+            fs.Close();
+        }
+    }
+
+    private void load_file() {
+        FileStream fs = null;
+
+        try {
+            fs = new FileStream(filepath, FileMode.Open);
+            BinaryReader r = new BinaryReader(fs);
+
+            // read offsets
+            for(int i = 0; i < 250; i++) {
+                offsets[i] = r.ReadUInt32();
+            }
+
+            // read strings (TODO, a bit bodged)
+            for(UInt32 i = 0; i < 250; i++) {
+                TexString sec = new TexString();
+                UInt32 end;
+                string text = "";
+
+                if(i == 249) {
+                    end = 30000; // TODO
+                } else {
+                    end = ((offsets[i+1] - offsets[i]) * 2);
+                }
+
+                r.BaseStream.Seek((0x3e8 + offsets[i]*2), SeekOrigin.Begin);
+                for(UInt32 rp = 0; rp < end; rp += 2) {
+                    byte[] b = r.ReadBytes(2);
+
+                    if(b[0] == 0 && b[1] == 0) {
+                        if(text.Length > 1) {
+                            sec.Text = text;
+                            sec.Index = i;
+                            sections.Add(sec);
+                        }
+                        text = "";
+                        sec = new TexString();
+                    }else {
+                        text += System.Text.Encoding.Unicode.GetString(b);
+                    }
+                }
+            }
+        }
+        catch (IOException)
+        {
+            return;
         } finally {
             fs.Close();
         }
@@ -168,51 +254,8 @@ class TxtEdit : Window
         filechooser.Filter = filter;
 
         if(filechooser.Run() == (int)ResponseType.Accept) {
-            FileStream fs = null;
             filepath = filechooser.Filename;
-
-            try {
-                fs = new FileStream(filepath, FileMode.Open);
-                BinaryReader r = new BinaryReader(fs);
-
-                // read offsets
-                for(int i = 0; i < 250; i++) {
-                    offsets[i] = r.ReadUInt32();
-                }
-
-                // read strings
-                for(UInt32 i = 0; i < 250; i++) {
-                    Section sec = new Section();
-                    UInt32 end;
-
-                    if(i == 249) {
-                        end = 10; // TODO
-                    }else {
-                        end = ((offsets[i+1] - offsets[i]) * 2);
-                    }
-
-                    sec.Index = i;
-
-                    r.BaseStream.Seek((0x3e8 + offsets[i]*2), SeekOrigin.Begin);
-                    for(UInt32 rp = 0; rp < end; rp += 2) {
-                        byte[] b = r.ReadBytes(2);
-                        sec.Text += System.Text.Encoding.Unicode.GetString(b);
-
-                        if(b[0] == 0 && b[1] == 0) {
-                            if(sec.Text.Length > 1) {
-                                sections.Add(sec);
-                            }
-                            sec = new Section();
-                        }
-                    }
-                }
-            }
-            catch (IOException)
-            {
-                return;
-            } finally {
-                fs.Close();
-            }
+            load_file();
          }
 
         filechooser.Destroy();
